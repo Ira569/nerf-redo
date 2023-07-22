@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="root@192.168.124.15:22 password (3)" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="root@192.168.124.15:22 password (2)" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
+    <option name="confirmBeforeUploading" value="false" />
     <serverData>
       <paths name="root@192.168.124.15:22 password">
         <serverdata>
@@ -17,6 +18,13 @@
         </serverdata>
       </paths>
       <paths name="root@192.168.124.15:22 password (3)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/ly/pzz/nerf-redo" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@192.168.124.15:22 password (4)">
         <serverdata>
           <mappings>
             <mapping deploy="/home/ly/pzz/nerf-redo" local="$PROJECT_DIR$" />
