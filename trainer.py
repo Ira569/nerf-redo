@@ -1,5 +1,6 @@
 import time
 
+from  inference import render_path
 import tqdm
 from tqdm import trange
 
@@ -230,15 +231,6 @@ def train():
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()} Time: {dt}")
 
         global_step += 1
-
-
-
-    model = NeRF()
-
-    pass
-
-
-
 
     # for batch, (X, y) in enumerate(dataloader):
     #     X, y = X.to(device), y.to(device)

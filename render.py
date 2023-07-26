@@ -47,7 +47,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     # 计算公式3 [bs, 64],
     alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
 
-    # 后面这部分就是Ti，前面是alpha，这个就是论文上的那个权重w [bs,64]
+    # 后面这部分就是Ti，前面是alpha，这个就是论文上的那个权重w [bs,64]      按这个计算方法，cumprod的第一个值不应该是1吗， 哦对乘以alpha以后就应该是alpha了。
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)),
                                                1. - alpha + 1e-10], -1),
                                     -1)[:, :-1]
@@ -69,7 +69,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
 
     if white_bkgd:
         rgb_map = rgb_map + (1. - acc_map[..., None])
-
+    # 只有rgb 和weights 是有意义的，其他的在后面都没有使用过，其实感觉也没有用
     return rgb_map, disp_map, acc_map, weights, depth_map
 
 def render_rays(ray_batch,
