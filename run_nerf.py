@@ -1,34 +1,67 @@
 import time
 import tqdm
-import torch
 
-from help_function.run_nerf_helper import batchify
-from network import *
+from tqdm import tqdm, trange
+
 from read_data import *
 from help_function.run_nerf_helper import *
-from render import render
+from render import *
+from help_function.render_helper import render_path
+
+from torch.utils.tensorboard import SummaryWriter
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 def train():
-    # blender data
-    images, poses, render_poses, [H, W, focal], i_split = read_lego_data()
+    # 走之前设置一下吧
+    wait_minute = 240
+    wait_secs = 60 * wait_minute
+    time.sleep(wait_secs)
+
+
+    from opts import config_parser
+    parser = config_parser()
+    args = parser.parse_args()
+
+
+
+
+    images, poses, render_poses, hwf, i_split = read_lego_data()
     i_train, i_val, i_test = i_split
-    near = 2
+
+    near =2
     far = 6
+    H,W,focal = hwf
+    H, W = int(H), int(W)
+    hwf = [H, W, focal]
+
+    images = images[..., :3]
     K = np.array([
         [focal, -1, 0.5 * W],
         [-1, focal, 0.5 * H],
         [-1, 0, 1]
     ])
-
-    images = images[..., :3]
     render_poses = torch.Tensor(render_poses).to(device)
 
-    render_kwargs_train, render_kwargs_test,start,grad_vars,optimizer = create_nerf()
+    basedir = args.basedir
+    expname = args.expname
+
+    writer = SummaryWriter(basedir+expname)
+
+    create_log_files(basedir,expname,args)
+    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
     global_steps = start
 
-    N_rand = 1024
-    use_batching = False
+    bds_dict = {
+        'near': near,
+        'far': far,
+    }
+    render_kwargs_train.update(bds_dict)
+    render_kwargs_test.update(bds_dict)
+
+    N_rand = args.N_rand
+    use_batching = not args.no_batching
 
     if use_batching:
         # For random ray batching
@@ -49,19 +82,24 @@ def train():
         images = torch.Tensor(images).to(device)
         rays_rgb = torch.Tensor(rays_rgb).to(device)
 
+    # 统一一个时刻放进cuda ?
     poses = torch.Tensor(poses).to(device)
 
     print('Begin')
     N_iters = 200000 + 1
+    # 养成随时调试的好习惯,改完代码后用print调试大法也挺好的
+
+    # N_iters = 5000 + 1
+
     precrop_iters = 500
     precrop_frac = 0.5
     start += 1
-    for i in range(start,N_iters):
-        time0=time.time()
+    for i in trange(start, N_iters):
+        time0 = time.time()
         if use_batching:
-            batch = rays_rgb[i_batch:i_batch+N_rand]
-            batch = torch.transpose(batch,0,1)
-            batch_rays,rgb_ = batch[:2],batch[2]
+            batch = rays_rgb[i_batch:i_batch + N_rand]
+            batch = torch.transpose(batch, 0, 1)
+            batch_rays, rgb_ = batch[:2], batch[2]
 
             i_batch += N_rand
             if (i_batch >= rays_rgb.shape[0]):
@@ -73,7 +111,7 @@ def train():
             img_idx = np.random.choice(i_train)
             target = images[img_idx]
             target = torch.Tensor(target).to(device)
-            pose = poses[img_idx,:3,:4]
+            pose = poses[img_idx, :3, :4]
 
             if N_rand is not None:
                 rays_o, rays_d = get_rays_torch(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
@@ -106,7 +144,7 @@ def train():
                 # target 用来最后的mse loss 计算
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
-        rgb, disp, acc, extras = render(H, W, K, chunk=1024*32, rays=batch_rays,
+        rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                         verbose=i < 10, retraw=True,
                                         **render_kwargs_train)
 
@@ -129,19 +167,17 @@ def train():
         ###   update learning rate   ###
         # 学习率衰减
         decay_rate = 0.1
-        lrate = 5e-4
-        lrate_decay = 500
-        decay_steps = lrate_decay * 1000
-        new_lrate = lrate * (decay_rate ** (global_steps / decay_steps))
+        decay_steps = args.lrate_decay * 1000
+        new_lrate = args.lrate * (decay_rate ** (global_steps / decay_steps))
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = new_lrate
 
-        basedir ='./ logs'
-        expname = 'blender_paper_lego'
+
         # 保存模型
-        i_weights = 1000
+        # i_weights = 10000
 
-        if i % i_weights == 0:
+        if i % args.i_weights == 0:
             path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
-            fine_path = os.path.join(basedir, expname, 'fine_model{:06d}.tar'.format(i))
             torch.save({
                 # 运行的轮次数目
                 'global_step': global_steps,
@@ -151,17 +187,53 @@ def train():
                 'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
                 # 优化器的状态
                 'optimizer_state_dict': optimizer.state_dict(),
-            },path)
-
+            }, path)
             print('Saved checkpoints at', path)
+
+
+        if i % args.i_img == 0:
+            # print(' i%i_img=0 ',i)
+            # print('/n/n')
+            # tb_psnr = 'psnr'
+            writer.add_scalar('psnr',psnr,global_steps)
+            writer.add_scalar('loss',loss,global_steps)
+
+            if i == N_iters - 1:
+                writer.close()
+
+
+
+        if i % args.i_video == 0 and i > 0:
+            # Turn on testing mode
+            with torch.no_grad():
+                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+            print('Done, saving', rgbs.shape, disps.shape)
+            moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+            # 360度转一圈的视频
+            imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+
+            # imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+
+
+
+        if i % args.i_testset == 0 and i > 0:
+            testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
+            os.makedirs(testsavedir, exist_ok=True)
+            print('test poses shape', poses[i_test].shape)
+            with torch.no_grad():
+                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test,
+                            gt_imgs=images[i_test], savedir=testsavedir)
+            print('Saved test set')
 
         dt = time.time() - time0
 
-        i_print = 10000
-        i_video = 50000
-        if i % i_print == 0:
+        # i_print = 10000
+        # i_video = 50000
+        if i % args.i_print == 0:
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()} Time: {dt}")
+
         global_steps += 1
+
 
 if __name__ == '__main__':
     if torch.cuda.is_available():

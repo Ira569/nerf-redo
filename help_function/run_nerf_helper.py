@@ -19,35 +19,97 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 img2mse = lambda x, y: torch.mean((x - y) ** 2)
 mse2psnr = lambda x: -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
-
-def create_nerf():
-    model = NeRF()
+to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
+def create_nerf(args):
+    # embed_fn, input_ch = pos_enc,3
+    #
+    # input_ch_views = 0
+    # embeddirs_fn = view_enc
+    # if args.use_viewdirs:
+    #     embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
+    #
+    # # 想要=5生效，首先需要use_viewdirs=False and N_importance>0
+    # output_ch = 5 if args.N_importance > 0 else 4
+    # skips = [4]
+    # 粗网络
+    model = NeRF().to(device)
     grad_vars = list(model.parameters())
-    model_fine = NeRF()
-    grad_vars += list(model_fine.parameters())
-    network_fn = lambda inputs, viewdirs, network_fn: run_network(inputs, viewdirs, network_fn,
+
+    model_fine = None
+    if args.N_importance > 0:
+        # 精细网络
+        model_fine = NeRF().to(device)
+        # 模型参数
+        grad_vars += list(model_fine.parameters())
+
+    # netchunk 是网络中处理的点的batch_size
+    network_query_fn = lambda inputs, viewdirs, network_fn: run_network(inputs, viewdirs, network_fn,
                                                                         embed_fn=pos_enc,
                                                                         embeddirs_fn=view_enc,
-                                                                        netchunk=1023*64)
-    optimizer = torch.optim.Adam(params=grad_vars,lr = 5e-4,betas = (0.9,0.999))
-    start = -1
-    # netchunk 是网络中处理的点的batch_size
-    network_query_fn = lambda inputs, viewdirs, network_fn: run_network(inputs, viewdirs, network_fn)
+                                                                        netchunk=args.netchunk)
+
+    # Create optimizer
+    # 优化器
+    optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+
+    start = 0
+    basedir = args.basedir
+    expname = args.expname
+
+    ##########################
+
+    # Load checkpoints
+    if args.ft_path is not None and args.ft_path != 'None':
+        ckpts = [args.ft_path]
+    else:
+        ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if
+                 'tar' in f]
+
+    print('Found ckpts', ckpts)
+
+    # load参数
+    if len(ckpts) > 0 and not args.no_reload:
+        ckpt_path = ckpts[-1]
+        print('Reloading from', ckpt_path)
+        ckpt = torch.load(ckpt_path)
+
+        start = ckpt['global_step']
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+
+        # Load model
+        model.load_state_dict(ckpt['network_fn_state_dict'])
+        if model_fine is not None:
+            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+
+    ##########################
+
     render_kwargs_train = {
+        'network_query_fn': network_query_fn,
+        'perturb': args.perturb,
+        'N_importance': args.N_importance,
         # 精细网络
         'network_fine': model_fine,
+        'N_samples': args.N_samples,
         # 粗网络
         'network_fn': model,
-        'network_query_fn':network_query_fn
+        'use_viewdirs': args.use_viewdirs,
+        'white_bkgd': args.white_bkgd,
+        'raw_noise_std': args.raw_noise_std,
     }
-    #    if args.dataset_type != 'llff' or args.no_ndc:
-    #     print('Not ndc!')
-    #     render_kwargs_train['ndc'] = False
-    # render_kwargs_train['lindisp'] = args.lindisp
+
+    print(model_fine)
+
+    # NDC only good for LLFF-style forward facing data
+    if args.dataset_type != 'llff' or args.no_ndc:
+        print('Not ndc!')
+        render_kwargs_train['ndc'] = False
+        render_kwargs_train['lindisp'] = args.lindisp
 
     render_kwargs_test = {k: render_kwargs_train[k] for k in render_kwargs_train}
+    render_kwargs_test['perturb'] = False
+    render_kwargs_test['raw_noise_std'] = 0.
 
-    return render_kwargs_train, render_kwargs_test,start, grad_vars, optimizer
+    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
 def get_rays_torch(H, W, K, c2w):
@@ -201,22 +263,42 @@ def create_log_files(basedir, expname, args):
             file.write(open(args.config, 'r').read())
 
     return basedir, expname
-# import imageio
-# def run_render_only(args, images, i_test, basedir, expname, render_poses, hwf, K, render_kwargs_test, start):
-#     with torch.no_grad():
-#         if args.render_test:
-#             # render_test switches to test poses
-#             images = images[i_test]
-#         else:
-#             # Default is smoother render_poses path
-#             images = None
-#
-#         testsavedir = os.path.join(basedir, expname,
-#                                    'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
-#         os.makedirs(testsavedir, exist_ok=True)
-#         print('test poses shape', render_poses.shape)
-#
-#         rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images,
-#                               savedir=testsavedir, render_factor=args.render_factor)
-#         print('Done rendering', testsavedir)
-#         imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
+
+import torch
+import numpy as np
+
+
+# 平移
+trans_t = lambda t: torch.Tensor([
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, t],
+    [0, 0, 0, 1]]).float()
+
+# 绕x轴的旋转
+rot_phi = lambda phi: torch.Tensor([
+    [1, 0, 0, 0],
+    [0, np.cos(phi), -np.sin(phi), 0],
+    [0, np.sin(phi), np.cos(phi), 0],
+    [0, 0, 0, 1]]).float()
+
+# 绕y轴的旋转
+rot_theta = lambda th: torch.Tensor([
+    [np.cos(th), 0, np.sin(th), 0],
+    [0, 1, 0, 0],
+    [-np.sin(th), 0, np.cos(th), 0],
+    [0, 0, 0, 1]]).float()
+
+
+def pose_spherical(theta, phi, radius):
+    """
+    theta: -181 -- +180，间隔为9  传进去正负好像也只影响旋转顺序了，所以没什么问题。
+    phi: 固定值 -31
+    radius: 固定值 3
+    """
+    c2w = trans_t(radius)
+    c2w = rot_phi(phi / 180. * np.pi) @ c2w
+    c2w = rot_theta(theta / 180. * np.pi) @ c2w
+    c2w = torch.Tensor(np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])) @ c2w
+    return c2w
+

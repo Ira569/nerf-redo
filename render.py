@@ -10,8 +10,8 @@ __all__ = ['render', 'batchify_rays', 'render_rays', 'raw2outputs']
 
 
 def render(H, W, K,
-           chunk=1024 * 32, rays=None, c2w=None, ndc=True,
-           near=0., far=1.,
+           chunk=1024*32, rays=None, c2w=None, ndc=True,
+           near=2, far=6,
            use_viewdirs=False, c2w_staticcam=None,
            **kwargs):
     """Render rays
@@ -90,7 +90,7 @@ def render(H, W, K,
     return ret_list + [ret_dict]
 
 
-def batchify_rays(rays_flat, chunk=1024 * 32, **kwargs):
+def batchify_rays(rays_flat, chunk=1024, **kwargs):
     """
     Render rays in smaller minibatches to avoid OOM.
     rays_flat: [N_rand,11]

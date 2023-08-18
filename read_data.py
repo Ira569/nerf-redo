@@ -4,7 +4,7 @@ import torch
 import os
 import json
 import numpy as np
-from help_function.show_result import pose_spherical
+from help_function.run_nerf_helper import *
 
 def read_lego_data(basedir = 'data/nerf_synthetic/lego',half_res = True,testskip=1):
 
@@ -44,6 +44,7 @@ def read_lego_data(basedir = 'data/nerf_synthetic/lego',half_res = True,testskip
     H, W = imgs[0].shape[:2]
     camera_angle_x = float(meta['camera_angle_x'])
     focal = .5 * W / np.tan(.5 * camera_angle_x)
+
 
     render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180, 180, 40 + 1)[:-1]], 0)
 

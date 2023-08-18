@@ -77,7 +77,7 @@ class NeRF(nn.Module):
 
         return outputs
 
-def run_network(inputs, viewdirs, fn, embed_fn = pos_enc, embeddirs_fn = view_enc, netchunk=1024 * 16):
+def run_network(inputs, viewdirs, fn, embed_fn = pos_enc, embeddirs_fn = view_enc, netchunk=1024*32):
     """
     被下面的create_nerf 封装到了lambda方法里面
     Prepares inputs and applies network 'fn'.
@@ -86,7 +86,7 @@ def run_network(inputs, viewdirs, fn, embed_fn = pos_enc, embeddirs_fn = view_en
     fn: 神经网络模型 粗糙网络或者精细网络
     embed_fn:
     embeddirs_fn:
-    netchunk:
+    netchunk: 一次进入网络的最多自变量个数   这个数还要*90
     """
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])  # [N_rand*64,3]
     # 坐标点进行编码嵌入 [N_rand*64,63]
