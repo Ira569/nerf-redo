@@ -88,7 +88,7 @@ def train():
     print('Begin')
     N_iters = 200000 + 1
     # 养成随时调试的好习惯,改完代码后用print调试大法也挺好的
-
+    N_iters = args.N_iters+1
     # N_iters = 5000 + 1
 
     precrop_iters = 500
@@ -165,9 +165,14 @@ def train():
 
         # NOTE: IMPORTANT!
         ###   update learning rate   ###
+        #每隔   *0.1的（step/500000）
+        # lrate *   0.1^(200000/500000) = lrate *0.1^0.4 =0.39*lrate
+        # 一般是最后要衰减百倍
+        # 但是如果没有这个*1000，
         # 学习率衰减
         decay_rate = 0.1
         decay_steps = args.lrate_decay * 1000
+
         new_lrate = args.lrate * (decay_rate ** (global_steps / decay_steps))
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
@@ -191,7 +196,7 @@ def train():
             print('Saved checkpoints at', path)
 
 
-        if i % args.i_img == 0:
+        if i % args.i_img == 0 and i > 0:
             # print(' i%i_img=0 ',i)
             # print('/n/n')
             # tb_psnr = 'psnr'
